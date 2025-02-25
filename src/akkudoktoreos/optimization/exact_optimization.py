@@ -543,17 +543,31 @@ class MILPOptimization(ConfigMixin, DevicesMixin, EnergyManagementSystemMixin):
                 model.setSolVal(solution, vars.flow_direction[t], warm_flow_direction[t])
 
         # Try to add the solution to the model
-        print(solution)
+
         print('checking solution')
-        accepted = model.trySol(solution)
+        try:
+            accepted = model.checkSol(solution, completely=True, original=True)
 
-        if accepted:
-            print("Warm start solution was accepted")
-        else:
-            print("Warm start solution was rejected - check solution feasibility")
+            if accepted:
+                print("Warm start solution was accepted")
+                try:
+                    model.addSol(solution)
+                    print("Solution successfully added")
+                except Exception as e:
+                    print(f"Error adding solution: {e}")
+            else:
+                print("Warm start solution was rejected - check solution feasibility")
 
-        # Free the solution object
-        model.freeSol(solution)
+                # Print some details to debug
+                for i, var in enumerate(model.getVars()):
+                    if solution[i] < var.getLbOriginal() or solution[i] > var.getUbOriginal():
+                        print(
+                            f"Variable {var.name} has value {solution[i]} outside bounds [{var.getLbOriginal()}, {var.getUbOriginal()}]")
+
+        except Exception as e:
+            print(f"Error checking solution: {e}")
+
+
 
     def generate_warm_start(
             self,

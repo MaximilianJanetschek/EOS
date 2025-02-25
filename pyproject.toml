@@ -103,6 +103,6 @@ module = "xprocess.*"
 ignore_missing_imports = true
 
 [tool.poetry.dependencies]
-pyscipopt = "^5.2.1"
 ruff = "^0.9.6"
 black = "^25.1.0"
+pyscipopt = "5.2.1"
