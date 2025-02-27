@@ -13,6 +13,7 @@ from akkudoktoreos.core.pydantic import ParametersBaseModel
 from akkudoktoreos.optimization.genetic import OptimizationParameters
 from akkudoktoreos.optimization.utils import visualize_warm_start
 import time
+import numpy as np
 
 class ExactSolutionResponse(ParametersBaseModel):
     """Response model for the exact optimization solution."""
@@ -641,7 +642,6 @@ class MILPOptimization(ConfigMixin, DevicesMixin, EnergyManagementSystemMixin):
 
         # ----- SECOND PASS: Ensure minimum SOC at EVERY time step -----
         # For each battery, check if minimum SoC is met at all time steps
-        import numpy as np
         for batt_type in model_params.battery_set:
 
 
@@ -753,23 +753,14 @@ class MILPOptimization(ConfigMixin, DevicesMixin, EnergyManagementSystemMixin):
             model_params
         )
 
-        # ------ FOURTH PASS: Use the excess battery SoC in times where prices are super high
-        import numpy as np
+        # ------ THIRD PASS: Use the excess battery SoC in times where prices are super high
 
         # Get time indices sorted by price (highest first)
-        if isinstance(model_params.price_import, list):
-            des_prices = np.argsort([-p for p in model_params.price_import])
-        else:
-            # If price_import is a single value, we can't optimize based on price differences
-            des_prices = list(time_steps)
+        des_prices = np.argsort([-p for p in model_params.price_import])
 
         # Process high-price times first
         for t_idx in des_prices:
-            t = t_idx if isinstance(t_idx, int) else int(t_idx)
-
-            # Skip if time step is out of range
-            if t not in time_steps:
-                continue
+            t = t_idx
 
             # Check if we are importing
             if greedy_sol.grid_import[t] > 0:
@@ -818,9 +809,8 @@ class MILPOptimization(ConfigMixin, DevicesMixin, EnergyManagementSystemMixin):
                             for update_t, soc_pct in recalc_soc.items():
                                 greedy_sol.soc[batt_type, update_t] = soc_pct
 
-                            # Update grid import/export after this change
-                            greedy_sol._update_grid_values(
-                                                     time_steps, model_params)
+        # Update grid import/export after this change
+        greedy_sol._update_grid_values(time_steps, model_params)
 
         # Calculate and print objective after third pass
         greedy_sol._calculate_and_print_objective(
@@ -829,8 +819,7 @@ class MILPOptimization(ConfigMixin, DevicesMixin, EnergyManagementSystemMixin):
         )
 
 
-        # ----- THIRD PASS: Price optimization for the first battery -----
-
+        # ----- FOURTH PASS: Price optimization for the first battery -----
 
         # Assume the first battery in the list is capable of both charging and discharging
         # This pass is only applicable if we have at least one battery
@@ -839,25 +828,25 @@ class MILPOptimization(ConfigMixin, DevicesMixin, EnergyManagementSystemMixin):
             main_battery = model_params.battery_set[0]
 
             # Create a list of timesteps with grid import costs
-            if isinstance(model_params.price_import, list):
-                time_price_pairs = [(t, model_params.price_import[t]) for t in time_steps]
-            else:
-                time_price_pairs = [(t, model_params.price_import) for t in time_steps]
+            time_price_pairs = [(t, model_params.price_import[t]) for t in time_steps]
 
             # Sort by price (highest first for potential discharge opportunities)
             high_price_times = sorted(time_price_pairs, key=lambda x: x[1], reverse=True)
 
+            high_price_times = reversed(np.argsort(model_params.price_import))
+
             # Keep track of improvements
             improvement_found = True
             iteration = 0
-            max_iterations = 10  # Limit the number of iterations to prevent infinite loops
+            max_iterations = 0.5*len(time_steps)  # Limit the number of iterations to prevent infinite loops
 
             while improvement_found and iteration < max_iterations:
                 improvement_found = False
                 iteration += 1
 
                 # For each high price time where we're importing from grid
-                for high_t, high_price in high_price_times:
+                for high_t in high_price_times:
+                    high_price = model_params.price_import[high_t]
                     # Check if we're importing from grid
                     if greedy_sol.grid_import[high_t] <= 0:
                         continue  # No grid import at this time, no opportunity for improvement
@@ -886,9 +875,6 @@ class MILPOptimization(ConfigMixin, DevicesMixin, EnergyManagementSystemMixin):
                         # Check if we have capacity to charge at this time
                         current_battery_charge = greedy_sol.charge[main_battery, low_t]
                         available_charge_capacity = model_params.power_max[main_battery] - current_battery_charge
-
-                        if available_charge_capacity <= 0:
-                            continue  # No capacity to charge more at this time
 
                         # Calculate actual charging power we can add
                         charge_power_to_add = min(charging_power_needed, available_charge_capacity)
