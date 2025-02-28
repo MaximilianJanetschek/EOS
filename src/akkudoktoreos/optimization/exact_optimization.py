@@ -747,6 +747,9 @@ class MILPOptimization(ConfigMixin, DevicesMixin, EnergyManagementSystemMixin):
 
 
     def time_swap(self, model_params, time_steps, greedy_sol) -> HeuristicSolution:
+        
+        import_prices_array = np.array(model_params.price_import)
+        
         # Assume the first battery in the list is capable of both charging and discharging
         # This pass is only applicable if we have at least one battery
         if model_params.battery_set:
@@ -754,9 +757,8 @@ class MILPOptimization(ConfigMixin, DevicesMixin, EnergyManagementSystemMixin):
             main_battery = model_params.battery_set[0]
 
             # Create a list of timesteps with grid import costs
-            time_price_pairs = [(t, model_params.price_import[t]) for t in time_steps]
-
-            high_price_times = reversed(np.argsort(model_params.price_import))
+            low_price_times = np.argsort(import_prices_array)
+            high_price_times = reversed(low_price_times)
 
             # Keep track of improvements
             improvement_found = True
@@ -769,7 +771,7 @@ class MILPOptimization(ConfigMixin, DevicesMixin, EnergyManagementSystemMixin):
 
                 # For each high price time where we're importing from grid
                 for high_t in high_price_times:
-                    high_price = model_params.price_import[high_t]
+                    high_price = import_prices_array[high_t]
                     # Check if we're importing from grid
                     if greedy_sol.grid_import[high_t] <= 0:
                         continue  # No grid import at this time, no opportunity for improvement
@@ -785,10 +787,13 @@ class MILPOptimization(ConfigMixin, DevicesMixin, EnergyManagementSystemMixin):
                         continue  # No additional discharge possible
 
                     # Find earlier timesteps with lower prices where we could charge, Todo use numpy argsort and where to quickly check if sth is available
-                    earlier_times = [(t, p) for t, p in time_price_pairs if t < high_t and p < high_price]
-                    earlier_times.sort(key=lambda x: x[1])  # Sort by price (lowest first)
+                    earlier_prices = import_prices_array[0:high_t]
+                    earlier_times = np.argsort(earlier_prices)
 
-                    for low_t, low_price in earlier_times:
+
+                    for low_t in earlier_times:
+                        low_price = import_prices_array[low_t]
+
                         # Calculate how much energy would be needed for the discharge, accounting for efficiency
                         energy_needed = additional_discharge_power / model_params.eff_discharge[main_battery]
 
