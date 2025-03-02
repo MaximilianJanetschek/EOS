@@ -167,23 +167,25 @@ class ModelSolution:
 
 @dataclass
 class HeuristicSolution:
+    battery_set: list           # determines position in array, [battery_pos,t]
     charge: dict[tuple[str, int], float]
     discharge: dict[tuple[str, int], float]
     soc: dict[tuple[str, int], float]
-    grid_import: dict[int, float]
-    grid_export: dict[int, float]
-    flow_direction: dict[int, int]
+    grid_import: np.ndarray
+    grid_export: np.ndarray
+    flow_direction: np.ndarray
 
     @classmethod
     def from_params(cls, model_params: ModelParameters, time_steps: range):
+        battery_set = model_params.battery_set
         charge = {(b, t): 0.0 for b in model_params.battery_set for t in time_steps}
         discharge = {(b, t): 0.0 for b in model_params.battery_set for t in time_steps}
         soc = {(b, t): model_params.soc_init[b] for b in model_params.battery_set for t in time_steps}
-        grid_import = {t: 0.0 for t in time_steps}
-        grid_export = {t: 0.0 for t in time_steps}
-        flow_direction = {t: 0 for t in time_steps}  # 0 for import, 1 for export
+        grid_import = np.zeros(len(time_steps))
+        grid_export = np.zeros(len(time_steps))
+        flow_direction = np.zeros(len(time_steps))
 
-        return cls(charge, discharge, soc, grid_import, grid_export, flow_direction)
+        return cls(battery_set, charge, discharge, soc, grid_import, grid_export, flow_direction)
 
 
     def _update_grid_values(
@@ -345,7 +347,6 @@ class MILPOptimization(ConfigMixin, DevicesMixin, EnergyManagementSystemMixin):
 
         # Define sets
         time_steps = range(self.config.optimization_hours)  # Time steps
-
 
 
         grid_model = ModelParameters.init_from_parameters(parameters)
@@ -755,13 +756,13 @@ class MILPOptimization(ConfigMixin, DevicesMixin, EnergyManagementSystemMixin):
         # Assume the first battery in the list is capable of both charging and discharging
         # This pass is only applicable if we have at least one battery
         if model_params.battery_set:
+
             # Get the first battery (assuming it's the main battery that can both charge and discharge)
             main_battery = model_params.battery_set[0]
 
             # Create a list of timesteps with grid import costs
             low_price_times = np.argsort(import_prices_array)
-            high_price_times = set(reversed(low_price_times))
-
+            high_price_times = low_price_times[::-1]
 
             soc = np.array([greedy_sol.soc[main_battery, t] for t in time_steps])
 
@@ -769,25 +770,26 @@ class MILPOptimization(ConfigMixin, DevicesMixin, EnergyManagementSystemMixin):
             improvement_found = True
             iteration = 0
             max_iterations = 0.5*len(time_steps)  # Limit the number of iterations to prevent infinite loops
+            import_times = np.where(import_prices_array)
+            cand = set(np.intersect1d(high_price_times, import_times))
 
             while improvement_found and iteration < max_iterations:
                 improvement_found = False
                 iteration += 1
 
                 # For each high price time where we're importing from grid
-                for high_idx in high_price_times:
-                    high_t = time_steps[high_idx]  # Map to actual time step
+                for high_idx in cand:
                     high_price = import_prices_array[high_idx]
                     # Check if we're importing from grid
-                    if greedy_sol.grid_import[high_t] <= 0:
+                    if greedy_sol.grid_import[high_idx] <= 0:
                         continue  # No grid import at this time, no opportunity for improvement
 
 
                     # Calculate maximum discharge potential at this timestep
-                    current_battery_discharge = greedy_sol.discharge[main_battery, high_t]
+                    current_battery_discharge = greedy_sol.discharge[main_battery, high_idx]
                     additional_discharge_power = min(
                         model_params.power_max[main_battery] - current_battery_discharge,  # Power limit
-                        greedy_sol.grid_import[high_t]  # Only discharge up to the current grid import amount
+                        greedy_sol.grid_import[high_idx]  # Only discharge up to the current grid import amount
                     )
 
                     if additional_discharge_power <= 0:
@@ -795,18 +797,17 @@ class MILPOptimization(ConfigMixin, DevicesMixin, EnergyManagementSystemMixin):
 
                     # Find earlier timesteps with lower prices where we could charge
                     # We need indices that are earlier than high_idx
-                    earlier_indices = [i for i, t in enumerate(time_steps) if t < high_t]
+                    earlier_indices = [i for i, t in enumerate(time_steps) if t < high_idx]
                     if not earlier_indices:
                         continue
                     
                     # Get prices for earlier time steps
                     earlier_prices = import_prices_array[earlier_indices]
+                    
                     # Sort by price
                     price_order = np.argsort(earlier_prices)
-                    earlier_times_sorted = [earlier_indices[i] for i in price_order]
 
-                    for low_idx in earlier_times_sorted:
-                        low_t = time_steps[low_idx]
+                    for low_idx in price_order:
                         low_price = import_prices_array[low_idx]
 
                         # Calculate how much energy would be needed for the discharge, accounting for efficiency
@@ -816,11 +817,11 @@ class MILPOptimization(ConfigMixin, DevicesMixin, EnergyManagementSystemMixin):
                         charging_power_needed = energy_needed / model_params.eff_charge[main_battery]
 
                         # Check if we have capacity to charge at this time
-                        current_battery_charge = greedy_sol.charge[main_battery, low_t] / model_params.eff_charge[main_battery]
+                        current_battery_charge = greedy_sol.charge[main_battery, low_idx] / model_params.eff_charge[main_battery]
                         available_charge_capacity = model_params.power_max[main_battery] - current_battery_charge
 
                         # Calculate actual charging power we can add
-                        max_pos_soc = model_params.soc_max[main_battery] - np.max(soc[low_t: high_t])
+                        max_pos_soc = model_params.soc_max[main_battery] - np.max(soc[low_idx: high_idx])
                         max_soc_charge = (max_pos_soc * model_params.capacity[main_battery] / 100) / model_params.eff_charge[main_battery]
                         charge_power_to_add = min(charging_power_needed, available_charge_capacity, max_soc_charge)
 
@@ -840,12 +841,14 @@ class MILPOptimization(ConfigMixin, DevicesMixin, EnergyManagementSystemMixin):
                             continue  # Not profitable
 
                         # change soc, change charge and discharge
-                        greedy_sol.charge[main_battery, low_t] += charge_power_to_add / model_params.eff_charge[main_battery]
-                        greedy_sol.discharge[main_battery, high_t] += discharge_power_possible *  model_params.eff_discharge[main_battery]
-                        greedy_sol.grid_import[high_t] -= discharge_power_possible
-                        greedy_sol.grid_import[low_t] += charge_power_to_add
-                        soc[low_t: high_t] += soc_change
+                        greedy_sol.charge[main_battery, low_idx] += charge_power_to_add / model_params.eff_charge[main_battery]
+                        greedy_sol.discharge[main_battery, high_idx] += discharge_power_possible *  model_params.eff_discharge[main_battery]
+                        greedy_sol.grid_import[high_idx] -= discharge_power_possible
+                        greedy_sol.grid_import[low_idx] += charge_power_to_add
+                        soc[low_idx: high_idx] += soc_change
                         improvement_found = True
+                        if greedy_sol.grid_import[high_idx] <= 0:
+                            cand.remove(high_idx)
                         break  # Found a charging time for this discharge opportunity
 
                     if improvement_found:
