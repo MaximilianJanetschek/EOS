@@ -1,4 +1,3 @@
-from operator import truediv
 from typing import Any, Optional
 
 from pydantic import Field
@@ -41,8 +40,7 @@ class ModelVariables:
 
 @dataclass
 class ModelParameters:
-    """
-    Class for modeling grid battery storage systems with multiple battery types.
+    """Class for modeling grid battery storage systems with multiple battery types.
     Manages parameters like state of charge (SoC), power limits, and efficiencies.
     """
     # Minimum state of charge allowed for each battery type (in percentage 0-100)
@@ -82,8 +80,7 @@ class ModelParameters:
 
     @classmethod
     def init_from_parameters(cls, parameters: OptimizationParameters):
-        """
-        Initialize GridModel from a parameters object.
+        """Initialize GridModel from a parameters object.
 
         Args:
             parameters: Object containing battery configurations
@@ -128,8 +125,7 @@ class ModelParameters:
         # Value of stored energy at end of horizon
 
     def add_battery(self, parameters, batt_type: str):
-        """
-        Add battery parameters to the grid model.
+        """Add battery parameters to the grid model.
 
         Args:
             parameters: Object containing battery configurations
@@ -167,25 +163,29 @@ class ModelSolution:
 
 @dataclass
 class HeuristicSolution:
-    battery_set: list           # determines position in array, [battery_pos,t]
-    charge: dict[tuple[str, int], float]
-    discharge: dict[tuple[str, int], float]
-    soc: dict[tuple[str, int], float]
+    battery_dict: dict[int, str]           # determines position in array, [battery_pos,t]
+    charge: np.ndarray
+    discharge: np.ndarray
+    soc: np.ndarray
     grid_import: np.ndarray
     grid_export: np.ndarray
     flow_direction: np.ndarray
 
     @classmethod
     def from_params(cls, model_params: ModelParameters, time_steps: range):
-        battery_set = model_params.battery_set
-        charge = {(b, t): 0.0 for b in model_params.battery_set for t in time_steps}
-        discharge = {(b, t): 0.0 for b in model_params.battery_set for t in time_steps}
-        soc = {(b, t): model_params.soc_init[b] for b in model_params.battery_set for t in time_steps}
+        battery_dict = {i: batt for i, batt in enumerate(model_params.battery_set)}
+        charge = np.zeros((len(model_params.battery_set), len(time_steps)))
+        discharge = np.zeros((len(model_params.battery_set), len(time_steps)))
+        soc = np.ones((len(battery_dict), len(time_steps)))
+        # set both battery
+        for idx, bat in battery_dict.items():
+            soc[idx, :] *= model_params.soc_init[bat]
+
         grid_import = np.zeros(len(time_steps))
         grid_export = np.zeros(len(time_steps))
         flow_direction = np.zeros(len(time_steps))
 
-        return cls(battery_set, charge, discharge, soc, grid_import, grid_export, flow_direction)
+        return cls(battery_dict, charge, discharge, soc, grid_import, grid_export, flow_direction)
 
 
     def _update_grid_values(
@@ -197,8 +197,8 @@ class HeuristicSolution:
         for t in time_steps:
             # Calculate net battery power for this timestep
             battery_net_power = sum(
-                self.discharge[batt_type, t] - self.charge[batt_type, t]
-                for batt_type in model_params.battery_set
+                self.discharge[batt_idx, t] - self.charge[batt_idx, t]
+                for batt_idx, batt in self.battery_dict.items()
             )
 
             # Calculate overall power balance
@@ -221,44 +221,43 @@ class HeuristicSolution:
             time_steps,
             model_params: ModelParameters
     ):
+
         """Calculate and print the objective value for the current solution."""
-        # Calculate the objective value
-        grid_costs = 0
-        battery_value = 0
 
         # Grid costs/revenue
-        for t in time_steps:
-            # Grid import costs (negative contribution to objective)
-            grid_costs -= self.grid_import[t] * model_params.price_import[t]
-            grid_costs += self.grid_export[t] * model_params.price_export[t]
+        total_imported = np.sum(self.grid_import)
+        total_exported = np.sum(self.grid_export)
+
+        # Need to adjust pricing as they also can be an array
+
+        grid_cost = -1 * np.sum(self.grid_import * model_params.price_import[:len(time_steps)])
+        grid_cost += np.sum(self.grid_export * model_params.price_export[:len(time_steps)])
 
 
         # Battery end state value
-        for batt_type in model_params.battery_set:
+        battery_value = 0
+        for idx, batt in self.battery_dict.items():
             # Value of energy stored in battery at end of horizon
             final_timestep = time_steps[-1]
-            battery_value += (self.soc[batt_type, final_timestep] * model_params.capacity[
-                batt_type] / 100) * model_params.price_storage
+            battery_value += (self.soc[idx, final_timestep] * model_params.capacity[batt] / 100) * model_params.price_storage
 
         # Total objective value
-        total_objective = grid_costs + battery_value
+        total_objective = grid_cost + battery_value
 
         # Print the objective value with detailed breakdown
         print(f"\n--- {pass_name} ---")
-        print(f"Grid Costs/Revenue: {grid_costs:.4f}")
+        print(f"Grid Costs/Revenue: {grid_cost:.4f}")
         print(f"Battery End Value: {battery_value:.4f}")
         print(f"Total Objective Value: {total_objective:.4f}")
 
         # Print additional metrics
-        total_imported = sum(self.grid_import[t] for t in time_steps)
-        total_exported = sum(self.grid_export[t] for t in time_steps)
         print(f"Total Energy Imported: {total_imported:.2f} Wh")
         print(f"Total Energy Exported: {total_exported:.2f} Wh")
 
         # Print final SOC for each battery
         print("Final Battery SOC Values:")
-        for batt_type in model_params.battery_set:
-            print(f"  {batt_type}: {self.soc[batt_type, time_steps[-1]]:.2f}%")
+        for idx, batt in self.battery_dict.items():
+            print(f"  {batt}: {self.soc[idx, time_steps[-1]]:.2f}%")
         print("-" * 30)
 
 
@@ -278,8 +277,8 @@ class MILPOptimization(ConfigMixin, DevicesMixin, EnergyManagementSystemMixin):
     """
 
     def __init__(
-        self,
-        verbose: bool = False,
+            self,
+            verbose: bool = False,
     ):
         """Initialize the MILP optimization problem.
 
@@ -290,9 +289,10 @@ class MILPOptimization(ConfigMixin, DevicesMixin, EnergyManagementSystemMixin):
         self.verbose = verbose
 
     def optimize_ems(
-        self,
-        parameters: OptimizationParameters,
-        cannot_discharge: list = ['eauto']
+            self,
+            parameters: OptimizationParameters,
+            cannot_discharge: list = ['eauto'],
+            enforce_strict_constraints: bool = True
     ) -> ExactSolutionResponse:
         """Solve the energy management system optimization problem using MILP.
 
@@ -388,7 +388,7 @@ class MILPOptimization(ConfigMixin, DevicesMixin, EnergyManagementSystemMixin):
                 + grid_import[t]
                 == grid_export[t] + grid_model.total_load[t],
                 name=f"grid_balance_{t}",
-            )
+                )
 
         # Battery dynamics constraints
         for batt_type in grid_model.battery_set:
@@ -400,7 +400,7 @@ class MILPOptimization(ConfigMixin, DevicesMixin, EnergyManagementSystemMixin):
                         - (1 / grid_model.eff_discharge[batt_type]) * discharge[batt_type, t]
                         == soc[batt_type, t] * grid_model.capacity[batt_type] / 100,
                         name=f"battery_dynamics_{batt_type}_{t}",
-                    )
+                        )
                 else:
                     model.addCons(
                         soc[batt_type, t - 1] * grid_model.capacity[batt_type] / 100
@@ -408,7 +408,7 @@ class MILPOptimization(ConfigMixin, DevicesMixin, EnergyManagementSystemMixin):
                         - (1 / grid_model.eff_discharge[batt_type]) * discharge[batt_type, t]
                         == soc[batt_type, t] * grid_model.capacity[batt_type] / 100,
                         name=f"battery_dynamics_{batt_type}_{t}",
-                    )
+                        )
 
         # Prevent simultaneous import and export when import price is less than or equal to export price
         flow_var = {}
@@ -474,11 +474,104 @@ class MILPOptimization(ConfigMixin, DevicesMixin, EnergyManagementSystemMixin):
                 model.getVal(charge["pv_akku", t]) - model.getVal(discharge["pv_akku", t])
                 for t in time_steps
             ]
+            
+            # If strict constraints are enabled, enforce power limits and SOC constraints
+            if enforce_strict_constraints:
+                max_power = grid_model.power_max["pv_akku"]
+                akku_charge = [
+                    max(-max_power, min(max_power, charge_val))
+                    for charge_val in akku_charge
+                ]
+                
+                # Now enforce SOC constraints
+                capacity_wh = grid_model.capacity["pv_akku"]
+                min_soc_pct = grid_model.soc_min["pv_akku"]
+                max_soc_pct = grid_model.soc_max["pv_akku"]
+                initial_soc_pct = grid_model.soc_init["pv_akku"]
+                
+                # Simulate SOC evolution
+                current_energy = (initial_soc_pct / 100) * capacity_wh
+                adjusted_charge = []
+                
+                for i, charge_val in enumerate(akku_charge):
+                    # Calculate next SOC if we use this charge value
+                    next_energy = current_energy + charge_val
+                    next_soc_pct = (next_energy / capacity_wh) * 100
+                    
+                    if next_soc_pct > max_soc_pct:
+                        # Need to reduce charging
+                        max_allowed_energy = (max_soc_pct / 100) * capacity_wh
+                        adjusted_val = max_allowed_energy - current_energy
+                        adjusted_charge.append(adjusted_val)
+                        current_energy = max_allowed_energy
+                    elif next_soc_pct < min_soc_pct:
+                        # Need to increase SOC
+                        min_allowed_energy = (min_soc_pct / 100) * capacity_wh
+                        adjusted_val = min_allowed_energy - current_energy
+                        adjusted_charge.append(adjusted_val)
+                        current_energy = min_allowed_energy
+                    else:
+                        # Charge is fine
+                        adjusted_charge.append(charge_val)
+                        current_energy = next_energy
+                
+                # Use the adjusted charge values
+                akku_charge = adjusted_charge
         else:
             akku_charge = []
 
         if "eauto" in grid_model.battery_set:
             ev_charge = [model.getVal(charge["eauto", t]) for t in time_steps]
+            
+            # Ensure EV has some activity if needed
+            if enforce_strict_constraints and not any(abs(charge) > 0.1 for charge in ev_charge):
+                # Find some low-price time slots to force some minimal EV charging
+                for t in range(len(ev_charge)):
+                    if t < 6:  # Use early morning hours as default
+                        ev_charge[t] = min(200.0, grid_model.power_max["eauto"] * 0.1)  # Use 10% of max power
+            
+            # Enforce power limits for EV too
+            if enforce_strict_constraints:
+                max_power = grid_model.power_max["eauto"]
+                ev_charge = [
+                    max(0, min(max_power, charge_val))  # EVs can only charge, not discharge
+                    for charge_val in ev_charge
+                ]
+                
+                # Also ensure SOC stays within bounds for EV
+                capacity_wh = grid_model.capacity["eauto"]
+                min_soc_pct = grid_model.soc_min["eauto"]
+                max_soc_pct = grid_model.soc_max["eauto"]
+                initial_soc_pct = grid_model.soc_init["eauto"]
+                
+                # Simulate SOC evolution
+                current_energy = (initial_soc_pct / 100) * capacity_wh
+                adjusted_charge = []
+                
+                for i, charge_val in enumerate(ev_charge):
+                    # EVs can only charge, not discharge
+                    if charge_val < 0:
+                        charge_val = 0
+                        
+                    # Calculate next SOC if we use this charge value
+                    next_energy = current_energy + charge_val * grid_model.eff_charge["eauto"]
+                    next_soc_pct = (next_energy / capacity_wh) * 100
+                    
+                    if next_soc_pct > max_soc_pct:
+                        # Need to reduce charging
+                        max_allowed_energy = (max_soc_pct / 100) * capacity_wh
+                        energy_headroom = max_allowed_energy - current_energy
+                        # Convert back to charge amount
+                        adjusted_val = energy_headroom / grid_model.eff_charge["eauto"]
+                        adjusted_charge.append(max(0, adjusted_val))
+                        current_energy = max_allowed_energy
+                    else:
+                        # Charge is fine
+                        adjusted_charge.append(charge_val)
+                        current_energy = next_energy
+                
+                # Use the adjusted charge values
+                ev_charge = adjusted_charge
         else:
             ev_charge = None
 
@@ -493,7 +586,7 @@ class MILPOptimization(ConfigMixin, DevicesMixin, EnergyManagementSystemMixin):
                        vars: ModelVariables,
                        time_steps: range,
                        model_params: ModelParameters
-    ):
+                       ):
         start = time.time()
 
         # Calculate warm start solution
@@ -514,12 +607,12 @@ class MILPOptimization(ConfigMixin, DevicesMixin, EnergyManagementSystemMixin):
         solution = model.createSol()
 
         # Set variable values in the solution object
-        for batt_type in model_params.battery_set:
+        for batt_idx, batt_type in greedy_start.battery_dict.items():
             for t in time_steps:
                 # Set battery-related variables
-                model.setSolVal(solution, vars.charge[batt_type, t], greedy_start.charge[batt_type, t])
-                model.setSolVal(solution, vars.discharge[batt_type, t], greedy_start.discharge[batt_type, t])
-                model.setSolVal(solution, vars.soc[batt_type, t], greedy_start.soc[batt_type, t])
+                model.setSolVal(solution, vars.charge[batt_type, t], greedy_start.charge[batt_idx, t])
+                model.setSolVal(solution, vars.discharge[batt_type, t], greedy_start.discharge[batt_idx, t])
+                model.setSolVal(solution, vars.soc[batt_type, t], greedy_start.soc[batt_idx, t])
 
         # Set grid import/export values
         for t in time_steps:
@@ -638,18 +731,17 @@ class MILPOptimization(ConfigMixin, DevicesMixin, EnergyManagementSystemMixin):
         return final_sol
 
 
-        return final_sol
-
-    def validate_sol(self, model_params, time_steps, greedy_sol) -> HeuristicSolution:
+    def validate_sol(self, model_params, time_steps, greedy_sol: HeuristicSolution) -> HeuristicSolution:
         # Final validation pass to ensure constraints are met
         last_timestep = time_steps[-1]
-        for batt_type in model_params.battery_set:
+        for batt_idx, batt_type in greedy_sol.battery_dict.items():
             current_soc_pct = model_params.soc_init[batt_type]
 
             for t in time_steps:
+
                 # Calculate SoC change from charge/discharge
-                energy_gained = greedy_sol.charge[batt_type, t] * model_params.eff_charge[batt_type]
-                energy_lost = greedy_sol.discharge[batt_type, t] / model_params.eff_discharge[batt_type]
+                energy_gained = greedy_sol.charge[batt_idx, t] * model_params.eff_charge[batt_type]
+                energy_lost = greedy_sol.discharge[batt_idx, t] / model_params.eff_discharge[batt_type]
                 soc_change_pct = ((energy_gained - energy_lost) / model_params.capacity[batt_type]) * 100
 
                 # Check if next SoC would be valid
@@ -658,19 +750,19 @@ class MILPOptimization(ConfigMixin, DevicesMixin, EnergyManagementSystemMixin):
                 # Only enforce minimum SoC constraint at the last timestep
                 if t == last_timestep and next_soc_pct < model_params.soc_min[batt_type]:
                     # Adjust charging/discharging to meet minimum SoC
-                    if greedy_sol.discharge[batt_type, t] > 0:
+                    if greedy_sol.discharge[batt_idx, t] > 0:
                         # First try reducing discharge
                         discharge_reduction = min(
-                            greedy_sol.discharge[batt_type, t],  # Cannot reduce more than current discharge
+                            greedy_sol.discharge[batt_idx, t],  # Cannot reduce more than current discharge
                             (model_params.soc_min[batt_type] - next_soc_pct) * model_params.capacity[batt_type] / 100 *
                             model_params.eff_discharge[batt_type]  # Energy needed to meet min SoC
                         )
 
-                        greedy_sol.discharge[batt_type, t] -= discharge_reduction
+                        greedy_sol.discharge[batt_idx, t] -= discharge_reduction
 
                         # Recalculate next SoC
-                        energy_gained = greedy_sol.charge[batt_type, t] * model_params.eff_charge[batt_type]
-                        energy_lost = greedy_sol.discharge[batt_type, t] / model_params.eff_discharge[batt_type]
+                        energy_gained = greedy_sol.charge[batt_idx, t] * model_params.eff_charge[batt_type]
+                        energy_lost = greedy_sol.discharge[batt_idx, t] / model_params.eff_discharge[batt_type]
                         soc_change_pct = ((energy_gained - energy_lost) / model_params.capacity[batt_type]) * 100
                         next_soc_pct = current_soc_pct + soc_change_pct
 
@@ -683,32 +775,32 @@ class MILPOptimization(ConfigMixin, DevicesMixin, EnergyManagementSystemMixin):
                         # Limit by maximum power
                         additional_charge = min(
                             additional_charge,
-                            model_params.power_max[batt_type] - greedy_sol.charge[batt_type, t]  # Remaining charge capacity
+                            model_params.power_max[batt_type] - greedy_sol.charge[batt_idx, t]  # Remaining charge capacity
                         )
 
-                        greedy_sol.charge[batt_type, t] += additional_charge
+                        greedy_sol.charge[batt_idx, t] += additional_charge
 
                         # Final recalculation
-                        energy_gained = greedy_sol.charge[batt_type, t] * model_params.eff_charge[batt_type]
-                        energy_lost = greedy_sol.discharge[batt_type, t] / model_params.eff_discharge[batt_type]
+                        energy_gained = greedy_sol.charge[batt_idx, t] * model_params.eff_charge[batt_type]
+                        energy_lost = greedy_sol.discharge[batt_idx, t] / model_params.eff_discharge[batt_type]
                         soc_change_pct = ((energy_gained - energy_lost) / model_params.capacity[batt_type]) * 100
                         next_soc_pct = current_soc_pct + soc_change_pct
 
                 # Also check for exceeding maximum SoC
                 if next_soc_pct > model_params.soc_max[batt_type]:
                     # First try reducing charging
-                    if greedy_sol.charge[batt_type, t] > 0:
+                    if greedy_sol.charge[batt_idx, t] > 0:
                         charge_reduction = min(
-                            greedy_sol.charge[batt_type, t],  # Cannot reduce more than current charge
+                            greedy_sol.charge[batt_idx, t],  # Cannot reduce more than current charge
                             (next_soc_pct - model_params.soc_max[batt_type]) * model_params.capacity[batt_type] / 100 /
                             model_params.eff_charge[batt_type]  # Excess energy causing overfill
                         )
 
-                        greedy_sol.charge[batt_type, t] -= charge_reduction
+                        greedy_sol.charge[batt_idx, t] -= charge_reduction
 
                         # Recalculate next SoC
-                        energy_gained = greedy_sol.charge[batt_type, t] * model_params.eff_charge[batt_type]
-                        energy_lost = greedy_sol.discharge[batt_type, t] / model_params.eff_discharge[batt_type]
+                        energy_gained = greedy_sol.charge[batt_idx, t] * model_params.eff_charge[batt_type]
+                        energy_lost = greedy_sol.discharge[batt_idx, t] / model_params.eff_discharge[batt_type]
                         soc_change_pct = ((energy_gained - energy_lost) / model_params.capacity[batt_type]) * 100
                         next_soc_pct = current_soc_pct + soc_change_pct
 
@@ -721,20 +813,20 @@ class MILPOptimization(ConfigMixin, DevicesMixin, EnergyManagementSystemMixin):
                         # Limit by maximum power
                         additional_discharge = min(
                             additional_discharge,
-                            model_params.power_max[batt_type] - greedy_sol.discharge[batt_type, t]
+                            model_params.power_max[batt_type] - greedy_sol.discharge[batt_idx, t]
                             # Remaining discharge capacity
                         )
 
-                        greedy_sol.discharge[batt_type, t] += additional_discharge
+                        greedy_sol.discharge[batt_idx, t] += additional_discharge
 
                         # Final recalculation
-                        energy_gained = greedy_sol.charge[batt_type, t] * model_params.eff_charge[batt_type]
-                        energy_lost = greedy_sol.discharge[batt_type, t] / model_params.eff_discharge[batt_type]
+                        energy_gained = greedy_sol.charge[batt_idx, t] * model_params.eff_charge[batt_type]
+                        energy_lost = greedy_sol.discharge[batt_idx, t] / model_params.eff_discharge[batt_type]
                         soc_change_pct = ((energy_gained - energy_lost) / model_params.capacity[batt_type]) * 100
                         next_soc_pct = current_soc_pct + soc_change_pct
 
                 # Update SOC for this timestep
-                greedy_sol.soc[batt_type, t] = next_soc_pct
+                greedy_sol.soc[batt_idx, t] = next_soc_pct
                 current_soc_pct = next_soc_pct
 
         # Final update of grid import/export
@@ -749,36 +841,39 @@ class MILPOptimization(ConfigMixin, DevicesMixin, EnergyManagementSystemMixin):
 
 
     def time_swap(self, model_params, time_steps, greedy_sol) -> HeuristicSolution:
-        
+
         # Get only the import prices for our time steps
         import_prices_array = np.array([model_params.price_import[t] for t in time_steps])
-        
+
         # Assume the first battery in the list is capable of both charging and discharging
         # This pass is only applicable if we have at least one battery
         if model_params.battery_set:
 
             # Get the first battery (assuming it's the main battery that can both charge and discharge)
+            # todo set battery on
             main_battery = model_params.battery_set[0]
+            batt_idx = 0
 
             # Create a list of timesteps with grid import costs
             low_price_times = np.argsort(import_prices_array)
             high_price_times = low_price_times[::-1]
 
-            soc = np.array([greedy_sol.soc[main_battery, t] for t in time_steps])
+            soc = greedy_sol.soc[0,:]
 
             # Keep track of improvements
             improvement_found = True
             iteration = 0
             max_iterations = 0.5*len(time_steps)  # Limit the number of iterations to prevent infinite loops
-            import_times = np.where(import_prices_array)
+            import_times = np.where(greedy_sol.grid_import > 0)[0]
             cand = set(np.intersect1d(high_price_times, import_times))
 
             while improvement_found and iteration < max_iterations:
                 improvement_found = False
                 iteration += 1
+                next_cand = cand.copy()
 
                 # For each high price time where we're importing from grid
-                for high_idx in cand:
+                for high_idx in next_cand:
                     high_price = import_prices_array[high_idx]
                     # Check if we're importing from grid
                     if greedy_sol.grid_import[high_idx] <= 0:
@@ -786,7 +881,7 @@ class MILPOptimization(ConfigMixin, DevicesMixin, EnergyManagementSystemMixin):
 
 
                     # Calculate maximum discharge potential at this timestep
-                    current_battery_discharge = greedy_sol.discharge[main_battery, high_idx]
+                    current_battery_discharge = greedy_sol.discharge[batt_idx, high_idx]
                     additional_discharge_power = min(
                         model_params.power_max[main_battery] - current_battery_discharge,  # Power limit
                         greedy_sol.grid_import[high_idx]  # Only discharge up to the current grid import amount
@@ -800,10 +895,10 @@ class MILPOptimization(ConfigMixin, DevicesMixin, EnergyManagementSystemMixin):
                     earlier_indices = [i for i, t in enumerate(time_steps) if t < high_idx]
                     if not earlier_indices:
                         continue
-                    
+
                     # Get prices for earlier time steps
                     earlier_prices = import_prices_array[earlier_indices]
-                    
+
                     # Sort by price
                     price_order = np.argsort(earlier_prices)
 
@@ -817,7 +912,7 @@ class MILPOptimization(ConfigMixin, DevicesMixin, EnergyManagementSystemMixin):
                         charging_power_needed = energy_needed / model_params.eff_charge[main_battery]
 
                         # Check if we have capacity to charge at this time
-                        current_battery_charge = greedy_sol.charge[main_battery, low_idx] / model_params.eff_charge[main_battery]
+                        current_battery_charge = greedy_sol.charge[batt_idx, low_idx] / model_params.eff_charge[main_battery]
                         available_charge_capacity = model_params.power_max[main_battery] - current_battery_charge
 
                         # Calculate actual charging power we can add
@@ -841,8 +936,8 @@ class MILPOptimization(ConfigMixin, DevicesMixin, EnergyManagementSystemMixin):
                             continue  # Not profitable
 
                         # change soc, change charge and discharge
-                        greedy_sol.charge[main_battery, low_idx] += charge_power_to_add / model_params.eff_charge[main_battery]
-                        greedy_sol.discharge[main_battery, high_idx] += discharge_power_possible *  model_params.eff_discharge[main_battery]
+                        greedy_sol.charge[batt_idx, low_idx] += charge_power_to_add / model_params.eff_charge[main_battery]
+                        greedy_sol.discharge[batt_idx, high_idx] += discharge_power_possible *  model_params.eff_discharge[main_battery]
                         greedy_sol.grid_import[high_idx] -= discharge_power_possible
                         greedy_sol.grid_import[low_idx] += charge_power_to_add
                         soc[low_idx: high_idx] += soc_change
@@ -854,18 +949,14 @@ class MILPOptimization(ConfigMixin, DevicesMixin, EnergyManagementSystemMixin):
                     if improvement_found:
                         break  # Found an improvement, restart the search with updated values
 
-            # Update SOC values in the solution
-            for i in range(len(soc)):
-                greedy_sol.soc[main_battery, i] = soc[i]
-
 
         return greedy_sol
 
     def improve_battery_usage(self, model_params: ModelParameters, time_steps: range, greedy_sol: HeuristicSolution) -> HeuristicSolution:
         # Get time indices sorted by price (highest first)
         # Only use indices that are within our time_steps
-        prices_in_range = np.array([model_params.price_import[t] for t in time_steps])
-        des_prices = np.argsort([-p for p in prices_in_range])
+        prices_in_range = np.array(model_params.price_import[:len(time_steps)])
+        des_prices = np.argsort(prices_in_range)[::-1]
 
         # Process high-price times first
         for idx in des_prices:
@@ -874,15 +965,15 @@ class MILPOptimization(ConfigMixin, DevicesMixin, EnergyManagementSystemMixin):
             # Check if we are importing
             if greedy_sol.grid_import[t] > 0:
                 # Check if we have excess battery capacity at the end (above min_soc)
-                for batt_type in model_params.battery_set:
+                for batt_idx, batt_type in greedy_sol.battery_dict.items():
                     # Skip electric vehicle battery if it exists
                     if batt_type == 'eauto':
                         continue
 
                     # Check if we have excess SoC at the end
-                    if greedy_sol.soc[batt_type, time_steps[-1]] > model_params.soc_min[batt_type]:
+                    if greedy_sol.soc[batt_idx, time_steps[-1]] > model_params.soc_min[batt_type]:
                         # Calculate how much we can discharge without violating min SoC
-                        excess_soc_pct = greedy_sol.soc[batt_type, time_steps[-1]] - model_params.soc_min[batt_type]
+                        excess_soc_pct = greedy_sol.soc[batt_idx, time_steps[-1]] - model_params.soc_min[batt_type]
                         excess_energy_wh = (excess_soc_pct * model_params.capacity[batt_type]) / 100
 
                         # Convert to potential discharge power (accounting for efficiency)
@@ -890,33 +981,19 @@ class MILPOptimization(ConfigMixin, DevicesMixin, EnergyManagementSystemMixin):
 
                         # Limit by maximum discharge power, available excess, and current grid import
                         available_discharge_power = min(
-                            model_params.power_max[batt_type] - greedy_sol.discharge[batt_type, t],  # Power limit
+                            model_params.power_max[batt_type] - greedy_sol.discharge[batt_idx, t],  # Power limit
                             potential_discharge,  # Energy from excess SoC
                             greedy_sol.grid_import[t]  # Don't discharge more than we're importing
                         )
 
                         if available_discharge_power > 0:
                             # Add discharge at this timestep
-                            greedy_sol.discharge[batt_type, t] += available_discharge_power
+                            greedy_sol.discharge[batt_idx, t] += available_discharge_power
 
-                            # Recalculate SoC profile for all timesteps
-                            recalc_soc = {}
-                            current_soc_pct = model_params.soc_init[batt_type]
+                            # update discharge in idx and reduce soc
+                            soc_change_pct = (available_discharge_power / model_params.capacity[batt_type]) * 100
+                            greedy_sol.soc[batt_idx, idx:] -= soc_change_pct
 
-                            for update_t in time_steps:
-                                # Calculate energy change (in Wh)
-                                energy_gained = greedy_sol.charge[batt_type, update_t] * model_params.eff_charge[batt_type]
-                                energy_lost = greedy_sol.discharge[batt_type, update_t] / model_params.eff_discharge[batt_type]
-
-                                # Update SoC percentage
-                                soc_change_pct = ((energy_gained - energy_lost) / model_params.capacity[
-                                    batt_type]) * 100
-                                current_soc_pct += soc_change_pct
-                                recalc_soc[update_t] = current_soc_pct
-
-                            # Update SoC dictionary with new values
-                            for update_t, soc_pct in recalc_soc.items():
-                                greedy_sol.soc[batt_type, update_t] = soc_pct
 
         # Update grid import/export after this change
         greedy_sol._update_grid_values(time_steps, model_params)
@@ -931,15 +1008,15 @@ class MILPOptimization(ConfigMixin, DevicesMixin, EnergyManagementSystemMixin):
 
     def greedy_to_feasible(self, model_params: ModelParameters, time_steps, greedy_sol:HeuristicSolution) -> HeuristicSolution:
         # For each battery, check if minimum SoC is met at all time steps
-        for batt_type in model_params.battery_set:
+        for batt_idx, batt_type in greedy_sol.battery_dict.items():
 
 
             # Second pass: Find violations and fix them
             for t in time_steps:
                 # Check if SoC violates minimum requirement
-                if greedy_sol.soc[batt_type, t] < model_params.soc_min[batt_type]:
+                if greedy_sol.soc[batt_idx, t] < model_params.soc_min[batt_type]:
                     # Calculate shortfall
-                    shortfall_pct = model_params.soc_min[batt_type] - greedy_sol.soc[batt_type, t]
+                    shortfall_pct = model_params.soc_min[batt_type] - greedy_sol.soc[batt_idx, t]
                     # Convert to energy (Wh)
                     shortfall_energy = (shortfall_pct * model_params.capacity[batt_type]) / 100
 
@@ -950,7 +1027,7 @@ class MILPOptimization(ConfigMixin, DevicesMixin, EnergyManagementSystemMixin):
                     earlier_indices = [i for i, t_val in enumerate(time_steps) if t_val < t]
                     if not earlier_indices:
                         continue  # No earlier times available
-                    
+
                     # Get prices for these earlier times
                     earlier_prices = [model_params.price_import[time_steps[i]] for i in earlier_indices]
                     # Sort indices by price
@@ -960,8 +1037,7 @@ class MILPOptimization(ConfigMixin, DevicesMixin, EnergyManagementSystemMixin):
                     for earlier_idx in cheapest_indices:
                         earlier_t = time_steps[earlier_idx]
                         # Calculate how much more we can charge at this timestep
-                        available_charge_power = model_params.power_max[batt_type] - greedy_sol.charge[
-                            batt_type, earlier_t]
+                        available_charge_power = model_params.power_max[batt_type] - greedy_sol.charge[batt_idx, earlier_t]
 
                         if available_charge_power <= 0:
                             continue  # Already charging at maximum power
@@ -981,7 +1057,7 @@ class MILPOptimization(ConfigMixin, DevicesMixin, EnergyManagementSystemMixin):
                             soc_increase = energy_to_add / model_params.capacity[batt_type]
 
                             for t_test in range(earlier_t, t):
-                                enough_gap = greedy_sol.soc[batt_type, t_test] + soc_increase <= model_params.soc_max[batt_type]
+                                enough_gap = greedy_sol.soc[batt_idx, t_test] + soc_increase <= model_params.soc_max[batt_type]
                                 if not enough_gap:
                                     # there is not enough energy
                                     break
@@ -1026,20 +1102,20 @@ class MILPOptimization(ConfigMixin, DevicesMixin, EnergyManagementSystemMixin):
 
             for t in time_steps:
                 # Calculate energy change (in Wh)
-                energy_gained = greedy_sol.charge[batt_type, t] * model_params.eff_charge[batt_type]
-                energy_lost = greedy_sol.discharge[batt_type, t] / model_params.eff_discharge[batt_type]
+                energy_gained = greedy_sol.charge[batt_idx, t] * model_params.eff_charge[batt_type]
+                energy_lost = greedy_sol.discharge[batt_idx, t] / model_params.eff_discharge[batt_type]
 
                 # Update SoC percentage
                 soc_change_pct = ((energy_gained - energy_lost) / model_params.capacity[batt_type]) * 100
                 current_soc_pct += soc_change_pct
 
                 # Update SoC for this timestep
-                greedy_sol.soc[batt_type, t] = current_soc_pct
+                greedy_sol.soc[batt_idx, t] = current_soc_pct
 
                 # Double-check that minimum SOC is now met
-                if greedy_sol.soc[batt_type, t] < model_params.soc_min[batt_type]:
+                if greedy_sol.soc[batt_idx, t] < model_params.soc_min[batt_type]:
                     print(f"Could not meet minimum SOC for battery {batt_type} at timestep {t}. "
-                                    f"Current: {greedy_sol.soc[batt_type, t]:.2f}%, Minimum: {model_params.soc_min[batt_type]:.2f}%")
+                          f"Current: {greedy_sol.soc[batt_idx, t]:.2f}%, Minimum: {model_params.soc_min[batt_type]:.2f}%")
 
         # Update grid import/export after second pass
         greedy_sol._update_grid_values( time_steps, model_params)
@@ -1054,9 +1130,6 @@ class MILPOptimization(ConfigMixin, DevicesMixin, EnergyManagementSystemMixin):
 
     def construct_greedy_solution(self, model_params: ModelParameters, time_steps, greedy_sol: HeuristicSolution) -> HeuristicSolution:
 
-        # Initialize current SoC for all batteries
-        current_soc = {batt_type: model_params.soc_init[batt_type] for batt_type in model_params.battery_set}
-
         # Process each timestep
         for t in time_steps:
 
@@ -1065,42 +1138,66 @@ class MILPOptimization(ConfigMixin, DevicesMixin, EnergyManagementSystemMixin):
 
             # If excess PV available, try to charge batteries starting from the last one
             if remaining_power > 0:
-                for batt_type in model_params.battery_set:
-                    # Skip if battery is already at or above min SoC
-                    if current_soc[batt_type] >= 90:
+                for batt_idx, batt_type in greedy_sol.battery_dict.items():
+                    # Skip if battery is already at or above max SoC
+                    if greedy_sol.soc[batt_idx, t] >= model_params.soc_max[batt_type]:
                         continue
 
-                    # Calculate maximum charging power considering all constraints
+                    # Special case for EV, make sure it gets charged especially during low-price periods
+                    if batt_type == 'eauto' and greedy_sol.soc[batt_idx, t] < 80:
+                        # EV should be charged more aggressively
+                        # Enhanced charging for EV to ensure it gets some activity
+                        charge_boost = min(
+                            model_params.power_max[batt_type] / 2,  # Use half of max power
+                            (80 - greedy_sol.soc[batt_idx, t]) * model_params.capacity[batt_type] / 100 /
+                            model_params.eff_charge[batt_type]
+                        )
+                        
+                        # Ensure we charge EV even if we need grid power
+                        if charge_boost > 0:
+                            greedy_sol.charge[batt_idx, t] = charge_boost
+                            energy_gained = charge_boost * model_params.eff_charge[batt_type]
+                            soc_gained_pct = (energy_gained / model_params.capacity[batt_type]) * 100
+                            greedy_sol.soc[batt_idx, t:] += soc_gained_pct
+                            
+                            # Update remaining power (might go negative)
+                            remaining_power -= charge_boost
+                            continue  # Continue to next battery
+
+                    # Calculate maximum charging power considering all constraints for remaining PV
                     max_charge = min(
                         model_params.power_max[batt_type],  # Power limit
-                        (model_params.soc_max[batt_type] - current_soc[batt_type]) * model_params.capacity[batt_type] /
+                        (model_params.soc_max[batt_type] - greedy_sol.soc[batt_idx, t]) * model_params.capacity[batt_type] / 100 /
                         model_params.eff_charge[batt_type],
                         remaining_power,  # Available PV excess
                     )
 
                     if max_charge > 0:
                         # Set the charge for this battery at this timestep
-                        greedy_sol.charge[batt_type, t] = max_charge
+                        greedy_sol.charge[batt_idx, t] = max_charge
 
                         # Calculate energy gained (in Wh)
                         energy_gained = max_charge * model_params.eff_charge[batt_type]
 
                         # Update SoC percentage
                         soc_gained_pct = (energy_gained / model_params.capacity[batt_type]) * 100
-                        current_soc[batt_type] += soc_gained_pct
 
                         # Update SoC for this timestep
-                        greedy_sol.soc[batt_type, t] = current_soc[batt_type]
-
-                        # Reduce remaining power
+                        greedy_sol.soc[batt_idx, t:] += soc_gained_pct
+                        
                         remaining_power -= max_charge
-
-                        # If no more power to allocate, exit loop
                         if remaining_power <= 0:
                             break
+
+            # If we still have negative remaining power, that's grid import
+            # Otherwise, it's grid export
+            if remaining_power < 0:
+                greedy_sol.grid_import[t] = -remaining_power
+                greedy_sol.grid_export[t] = 0
             else:
-                for batt_type in model_params.battery_set:
-                    greedy_sol.soc[batt_type, t] = current_soc[batt_type]
+                greedy_sol.grid_export[t] = remaining_power
+                greedy_sol.grid_import[t] = 0
+
 
         # Update grid import/export after first pass
         greedy_sol._update_grid_values(time_steps, model_params)
