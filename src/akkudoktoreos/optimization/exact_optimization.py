@@ -675,8 +675,6 @@ class MILPOptimization(ConfigMixin, DevicesMixin, EnergyManagementSystemMixin):
             - grid export power
             - flow direction binary variables
         """
-        # Initialize solution dictionaries
-        greedy_sol = HeuristicSolution.from_params(model_params= model_params, time_steps=time_steps)
 
         import time
 
@@ -865,20 +863,16 @@ class MILPOptimization(ConfigMixin, DevicesMixin, EnergyManagementSystemMixin):
             iteration = 0
             max_iterations = 0.5*len(time_steps)  # Limit the number of iterations to prevent infinite loops
             import_times = np.where(greedy_sol.grid_import > 0)[0]
-            cand = set(np.intersect1d(high_price_times, import_times))
+            cand:List = np.intersect1d(high_price_times, import_times).tolist()
 
             while improvement_found and iteration < max_iterations:
                 improvement_found = False
                 iteration += 1
-                next_cand = cand.copy()
 
                 # For each high price time where we're importing from grid
-                for high_idx in next_cand:
+                while len(cand) > 0:
+                    high_idx = cand.pop()
                     high_price = import_prices_array[high_idx]
-                    # Check if we're importing from grid
-                    if greedy_sol.grid_import[high_idx] <= 0:
-                        continue  # No grid import at this time, no opportunity for improvement
-
 
                     # Calculate maximum discharge potential at this timestep
                     current_battery_discharge = greedy_sol.discharge[batt_idx, high_idx]
@@ -890,14 +884,8 @@ class MILPOptimization(ConfigMixin, DevicesMixin, EnergyManagementSystemMixin):
                     if additional_discharge_power <= 0:
                         continue  # No additional discharge possible
 
-                    # Find earlier timesteps with lower prices where we could charge
-                    # We need indices that are earlier than high_idx
-                    earlier_indices = [i for i, t in enumerate(time_steps) if t < high_idx]
-                    if not earlier_indices:
-                        continue
-
                     # Get prices for earlier time steps
-                    earlier_prices = import_prices_array[earlier_indices]
+                    earlier_prices = import_prices_array[0:high_idx]
 
                     # Sort by price
                     price_order = np.argsort(earlier_prices)
@@ -943,8 +931,7 @@ class MILPOptimization(ConfigMixin, DevicesMixin, EnergyManagementSystemMixin):
                         soc[low_idx: high_idx] += soc_change
                         improvement_found = True
                         if greedy_sol.grid_import[high_idx] <= 0:
-                            cand.remove(high_idx)
-                        break  # Found a charging time for this discharge opportunity
+                            break
 
                     if improvement_found:
                         break  # Found an improvement, restart the search with updated values
@@ -1144,25 +1131,6 @@ class MILPOptimization(ConfigMixin, DevicesMixin, EnergyManagementSystemMixin):
                         continue
 
                     # Special case for EV, make sure it gets charged especially during low-price periods
-                    if batt_type == 'eauto' and greedy_sol.soc[batt_idx, t] < 80:
-                        # EV should be charged more aggressively
-                        # Enhanced charging for EV to ensure it gets some activity
-                        charge_boost = min(
-                            model_params.power_max[batt_type] / 2,  # Use half of max power
-                            (80 - greedy_sol.soc[batt_idx, t]) * model_params.capacity[batt_type] / 100 /
-                            model_params.eff_charge[batt_type]
-                        )
-                        
-                        # Ensure we charge EV even if we need grid power
-                        if charge_boost > 0:
-                            greedy_sol.charge[batt_idx, t] = charge_boost
-                            energy_gained = charge_boost * model_params.eff_charge[batt_type]
-                            soc_gained_pct = (energy_gained / model_params.capacity[batt_type]) * 100
-                            greedy_sol.soc[batt_idx, t:] += soc_gained_pct
-                            
-                            # Update remaining power (might go negative)
-                            remaining_power -= charge_boost
-                            continue  # Continue to next battery
 
                     # Calculate maximum charging power considering all constraints for remaining PV
                     max_charge = min(
