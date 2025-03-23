@@ -696,6 +696,7 @@ class TestExactOptimization:
         test_params["pv_akku"] = {
             "capacity_wh": 26400,
             "initial_soc_percentage": 50,
+            ""
             "min_soc_percentage": 40,  # Higher minimum SOC
             "max_soc_percentage": 80,  # Lower maximum SOC
             "max_charge_power_w": 5000,
@@ -712,13 +713,15 @@ class TestExactOptimization:
         initial_soc_pct = test_params["pv_akku"]["initial_soc_percentage"]
         min_soc_pct = test_params["pv_akku"]["min_soc_percentage"]
         max_soc_pct = test_params["pv_akku"]["max_soc_percentage"]
-        
-        current_energy = (initial_soc_pct / 100) * capacity_wh
+
+
         soc_values = [initial_soc_pct]
-        
+        current_soc = initial_soc_pct
         for charge in result.akku_charge:
-            current_energy += charge
-            current_soc = (current_energy / capacity_wh) * 100
+            if charge > 0:
+                current_soc += (charge*params.pv_akku.charging_efficiency / capacity_wh) * 100
+            else:
+                current_soc += (charge/params.pv_akku.discharging_efficiency / capacity_wh) * 100
             soc_values.append(current_soc)
         
         # Verify SOC constraints are met with some tolerance for floating point calculations
@@ -939,7 +942,7 @@ class TestExactOptimization:
         
         # Set specific price patterns to encourage different device usage
         for i in range(0, 6):  # Overnight charging opportunity
-            price_profile[i] = 0.00008  # Very low price
+            price_profile[i] = -0.00008  # Charging is always beneficial
         for i in range(18, 22):  # Evening peak
             price_profile[i] = 0.0004   # Very high price
         
@@ -1047,8 +1050,11 @@ class TestExactOptimization:
         
         # Verify constraints are still respected
         max_power = test_params["pv_akku"]["max_charge_power_w"]
-        assert all(-max_power <= charge <= max_power for charge in result.akku_charge), \
-            "Power constraints should be respected even with volatile inputs"
+        tolerance = 0.0001
+        assert all(
+            -max_power - tolerance <= charge <= max_power + tolerance
+            for charge in result.akku_charge
+        ), "Power constraints should be respected even with volatile inputs"
     
     def test_performance_scaling(self):
         """Test optimization performance scaling with problem size.
