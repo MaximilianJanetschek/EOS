@@ -42,7 +42,8 @@ class OptimizationParameters(ParametersBaseModel):
         description="An array of floats representing the temperature forecast in degrees Celsius for different time intervals.",
     )
     start_solution: Optional[list[float]] = Field(
-        default=None, description="Can be `null` or contain a previous solution (if available)."
+        default=None,
+        description="Can be `null` or contain a previous solution (if available).",
     )
 
     @model_validator(mode="after")
@@ -342,7 +343,11 @@ class optimization_problem(ConfigMixin, DevicesMixin, EnergyManagementSystemMixi
 
         # Mutation operator for charge/discharge states
         self.toolbox.register(
-            "mutate_charge_discharge", tools.mutUniformInt, low=0, up=total_states - 1, indpb=0.2
+            "mutate_charge_discharge",
+            tools.mutUniformInt,
+            low=0,
+            up=total_states - 1,
+            indpb=0.2,
         )
 
         # Mutation operator for EV states
@@ -482,9 +487,11 @@ class optimization_problem(ConfigMixin, DevicesMixin, EnergyManagementSystemMixi
         individual.extra_data = (  # type: ignore[attr-defined]
             o["Gesamtbilanz_Euro"],
             o["Gesamt_Verluste"],
-            parameters.eauto.min_soc_percentage - self.ems.ev.current_soc_percentage()
-            if parameters.eauto and self.ems.ev
-            else 0,
+            (
+                parameters.eauto.min_soc_percentage - self.ems.ev.current_soc_percentage()
+                if parameters.eauto and self.ems.ev
+                else 0
+            ),
         )
 
         # Adjust total balance with battery value and penalties for unmet SOC
@@ -547,7 +554,11 @@ class optimization_problem(ConfigMixin, DevicesMixin, EnergyManagementSystemMixi
             "min": log.select("min"),  # Minimum fitness for each generation (Y-axis)
         }
 
-        member: dict[str, list[float]] = {"bilanz": [], "verluste": [], "nebenbedingung": []}
+        member: dict[str, list[float]] = {
+            "bilanz": [],
+            "verluste": [],
+            "nebenbedingung": [],
+        }
         for ind in population:
             if hasattr(ind, "extra_data"):
                 extra_value1, extra_value2, extra_value3 = ind.extra_data

@@ -106,3 +106,4 @@ ignore_missing_imports = true
 ruff = "^0.9.6"
 black = "^25.1.0"
 pyscipopt = "^5.4.1"
+notebook = "^7.4.2"
