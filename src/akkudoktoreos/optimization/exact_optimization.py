@@ -333,6 +333,7 @@ class MILPOptimization(ConfigMixin, DevicesMixin, EnergyManagementSystemMixin):
                     model.addSol(solution)
                     print("Solution successfully added")
                 except Exception as e:
+                    raise ValueError
                     print(f"Error adding solution: {e}")
             else:
                 raise ValueError(f"Solution was not accepted: {accepted}. Check feasability!")
