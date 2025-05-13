@@ -465,7 +465,9 @@ class GreedyConstructionSolver:
         # Get time indices sorted by price (highest first)
         # Only use indices that are within our time_steps
         prices_in_range = np.array(self.model_params.price_import[: len(self.time_steps)])
+        import_mask = greedy_sol.grid_import > 0
         des_prices = np.argsort(prices_in_range)[::-1]
+
 
         # Process high-price times first
         for idx in des_prices:
