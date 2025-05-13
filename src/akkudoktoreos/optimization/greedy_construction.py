@@ -225,6 +225,7 @@ class GreedyConstructionSolver:
 
         # ----- FIRST PASS: Prioritized charging with excess solar, starting from first battery -----
         greedy_sol = self.construct_greedy_solution(greedy_sol)
+        print(np.max(greedy_sol.soc['pv_akku', :]), print(np.max(greedy_sol.soc['eauto', :])))
 
         # ----- SECOND PASS: Ensure minimum SOC at EVERY time step -----
         feasible_sol = self.greedy_to_feasible(greedy_sol)
@@ -324,113 +325,110 @@ class GreedyConstructionSolver:
         # Assume the first battery in the list is capable of both charging and discharging
         # This pass is only applicable if we have at least one battery
         if self.model_params.battery_set:
-            # Get the first battery (assuming it's the main battery that can both charge and discharge)
-            # todo set battery on
-            main_battery = self.model_params.battery_set[0]
-            batt_idx = 0
-
-            # Create a list of timesteps with grid import costs
-            low_price_times = np.argsort(import_prices_array)
-            high_price_times = low_price_times[::-1]
-
-            soc = greedy_sol.soc[batt_idx, :]
-
-            import_times = np.where(greedy_sol.grid_import > 0)[0]
-            cand = np.intersect1d(high_price_times, import_times)
-
-            def find_first_position(arr: np.ndarray, value: float) -> int:
-                indices = np.where(arr == value)[0]
-                if len(indices) > 0:
-                    return indices[-1]
-                else:
-                    return -1  # or None, or raise an exception
-
-            # For each high price time where we're importing from grid
-            for high_idx in cand:
-                high_price = import_prices_array[high_idx]
-
-                # Calculate maximum discharge potential at this timestep
-                current_battery_discharge = greedy_sol.discharge[batt_idx, high_idx]
-                additional_discharge_power = min(
-                    self.model_params.power_max[main_battery]
-                    - current_battery_discharge,  # Power limit
-                    greedy_sol.grid_import[
-                        high_idx
-                    ],  # Only discharge up to the current grid import amount
-                )
-
-                if additional_discharge_power <= 0:
-                    continue  # No additional discharge possible
-
-                # check if any time is at max before
-                max_soc_idx = find_first_position(
-                    greedy_sol.soc[batt_idx, :], self.model_params.soc_max[main_battery]
-                )
-                # Calculate how much energy would be needed for the discharge, accounting for efficiency
-                energy_needed = (
-                    additional_discharge_power / self.model_params.eff_discharge[main_battery]
-                )
-                charging_power_needed = energy_needed / self.model_params.eff_charge[main_battery]
-
-                for low_idx in low_price_times[
-                    (low_price_times < high_idx) & (low_price_times > max_soc_idx)
-                ]:
-                    # Check if we have capacity to charge at this time
-                    available_charge_capacity = (
-                        self.model_params.power_max[main_battery] - greedy_sol.charge[batt_idx, low_idx]
-                    )
-
-                    # Calculate actual charging power we can add
-                    max_pos_soc = self.model_params.soc_max[main_battery] - np.max(
-                        greedy_sol.soc[batt_idx, low_idx:high_idx]
-                    )
-                    max_soc_charge = (
-                        max_pos_soc * self.model_params.capacity[main_battery] / 100
-                    ) / self.model_params.eff_charge[main_battery]
-
-                    charge_power_to_add = min(
-                        charging_power_needed, available_charge_capacity, max_soc_charge
-                    )
-
-                    if charge_power_to_add <= 0:
-                        # if not available_charge_capacity was limiting factor we can stop here as no other will be better
-                        if not charge_power_to_add == available_charge_capacity:
-                            break
+            
+            for batt_idx, batt_type in greedy_sol.battery_dict.items():
+                if self.model_params.can_discharge[batt_type]:
+        
+                    # Create a list of timesteps with grid import costs
+                    low_price_times = np.argsort(import_prices_array)
+                    high_price_times = low_price_times[::-1]
+        
+                    import_times = np.where(greedy_sol.grid_import > 0)[0]
+                    cand = np.intersect1d(high_price_times, import_times)
+        
+                    def find_first_position(arr: np.ndarray, value: float) -> int:
+                        indices = np.where(arr == value)[0]
+                        if len(indices) > 0:
+                            return indices[-1]
                         else:
-                            continue
-
-                    low_price = import_prices_array[low_idx]
-                    # Calculate how much we can actually discharge with this amount of charge
-                    discharge_power_possible = (
-                        charge_power_to_add
-                        * self.model_params.eff_charge[main_battery]
-                        * self.model_params.eff_discharge[main_battery]
-                    )
-                    soc_change = (
-                        charge_power_to_add
-                        * self.model_params.eff_charge[main_battery]
-                        / self.model_params.capacity[main_battery]
-                        * 100
-                    )
-
-                    # Check if this arbitrage would be profitable
-                    cost_to_charge = charge_power_to_add * low_price
-                    savings_from_discharge = discharge_power_possible * high_price
-
-                    if savings_from_discharge < cost_to_charge:
-                        continue  # Not profitable
-
-                    # change soc, change charge and discharge
-                    greedy_sol.charge[batt_idx, low_idx] += (
-                        charge_power_to_add
-                    )
-                    greedy_sol.discharge[batt_idx, high_idx] += (
-                        discharge_power_possible
-                    )
-                    greedy_sol.grid_import[high_idx] -= discharge_power_possible
-                    greedy_sol.grid_import[low_idx] += charge_power_to_add
-                    greedy_sol.soc[batt_idx, low_idx:high_idx] += soc_change
-                    break  # Found a charging time for this discharge opportunity
+                            return -1  # or None, or raise an exception
+        
+                    # For each high price time where we're importing from grid
+                    for high_idx in cand:
+                        high_price = import_prices_array[high_idx]
+        
+                        # Calculate maximum discharge potential at this timestep
+                        current_battery_discharge = greedy_sol.discharge[batt_idx, high_idx]
+                        additional_discharge_power = min(
+                            self.model_params.power_max[batt_type]
+                            - current_battery_discharge,  # Power limit
+                            greedy_sol.grid_import[
+                                high_idx
+                            ],  # Only discharge up to the current grid import amount
+                        )
+        
+                        if additional_discharge_power <= 0:
+                            continue  # No additional discharge possible
+        
+                        # check if any time is at max before
+                        max_soc_idx = find_first_position(
+                            greedy_sol.soc[batt_idx, :], self.model_params.soc_max[batt_type]
+                        )
+                        # Calculate how much energy would be needed for the discharge, accounting for efficiency
+                        energy_needed = (
+                            additional_discharge_power / self.model_params.eff_discharge[batt_type]
+                        )
+                        charging_power_needed = energy_needed / self.model_params.eff_charge[batt_type]
+        
+                        for low_idx in low_price_times[
+                            (low_price_times < high_idx) & (low_price_times > max_soc_idx)
+                        ]:
+                            # Check if we have capacity to charge at this time
+                            available_charge_capacity = (
+                                self.model_params.power_max[batt_type] - greedy_sol.charge[batt_idx, low_idx]
+                            )
+        
+                            # Calculate actual charging power we can add
+                            max_pos_soc = self.model_params.soc_max[batt_type] - np.max(
+                                greedy_sol.soc[batt_idx, low_idx:high_idx]
+                            )
+                            max_soc_charge = (
+                                max_pos_soc * self.model_params.capacity[batt_type] / 100
+                            ) / self.model_params.eff_charge[batt_type]
+        
+                            charge_power_to_add = min(
+                                charging_power_needed, available_charge_capacity, max_soc_charge
+                            )
+        
+                            if charge_power_to_add <= 0:
+                                # if not available_charge_capacity was limiting factor we can stop here as no other will be better
+                                if not charge_power_to_add == available_charge_capacity:
+                                    break
+                                else:
+                                    continue
+        
+                            low_price = import_prices_array[low_idx]
+                            # Calculate how much we can actually discharge with this amount of charge
+                            discharge_power_possible = (
+                                charge_power_to_add
+                                * self.model_params.eff_charge[batt_type]
+                                * self.model_params.eff_discharge[batt_type]
+                            )
+                            soc_change = (
+                                charge_power_to_add
+                                * self.model_params.eff_charge[batt_type]
+                                / self.model_params.capacity[batt_type]
+                                * 100
+                            )
+        
+                            # Check if this arbitrage would be profitable
+                            cost_to_charge = charge_power_to_add * low_price
+                            savings_from_discharge = discharge_power_possible * high_price
+        
+                            if savings_from_discharge < cost_to_charge:
+                                continue  # Not profitable
+        
+                            # change soc, change charge and discharge
+                            greedy_sol.charge[batt_idx, low_idx] += (
+                                charge_power_to_add
+                            )
+                            greedy_sol.discharge[batt_idx, high_idx] += (
+                                discharge_power_possible
+                            )
+                            greedy_sol.grid_import[high_idx] -= discharge_power_possible
+                            greedy_sol.grid_import[low_idx] += charge_power_to_add
+                            greedy_sol.soc[batt_idx, low_idx:high_idx] += soc_change
+                            break  # Found a charging time for this discharge opportunity
 
         return greedy_sol
 
@@ -467,6 +465,7 @@ class GreedyConstructionSolver:
         prices_in_range = np.array(self.model_params.price_import[: len(self.time_steps)])
         des_prices = np.argsort(prices_in_range)[::-1]
 
+
         # Process high-price times first
         for idx in des_prices:
             t = idx
@@ -477,7 +476,7 @@ class GreedyConstructionSolver:
                 # Check if we have excess battery capacity at the end (above min_soc)
                 for batt_idx, batt_type in greedy_sol.battery_dict.items():
                     # Skip electric vehicle battery if it exists
-                    if batt_type == "eauto":
+                    if not self.model_params.can_discharge[batt_type]:
                         continue
 
                     # Check if we have excess SoC at the end
@@ -608,14 +607,9 @@ class GreedyConstructionSolver:
                         # we need to check if the soc allows to transfer the power
                         soc_increase = energy_to_add / self.model_params.capacity[batt_type]
 
-                        for t_test in range(earlier_t, t):
-                            enough_gap = (
-                                greedy_sol.soc[batt_idx, t_test] + soc_increase
-                                <= self.model_params.soc_max[batt_type]
-                            )
-                            if not enough_gap:
-                                # there is not enough energy
-                                break
+                        max_soc_after = np.max(greedy_sol.soc[batt_idx, earlier_t, t]) + soc_increase
+                        if max_soc_after > self.model_params.soc_max[batt_type]:
+                            break
 
                         # Reduce remaining shortfall
                         remaining_shortfall -= energy_to_add

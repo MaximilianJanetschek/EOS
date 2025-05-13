@@ -67,7 +67,7 @@ class MILPOptimization(ConfigMixin, DevicesMixin, EnergyManagementSystemMixin):
         self.verbose = verbose
 
     def optimize_ems(
-        self, parameters: OptimizationParameters, cannot_discharge: list = ["eauto"]
+        self, parameters: OptimizationParameters
     ) -> ExactSolutionResponse:
         """Solve the energy management system optimization problem using MILP.
 
@@ -130,7 +130,7 @@ class MILPOptimization(ConfigMixin, DevicesMixin, EnergyManagementSystemMixin):
         discharge = {}  # Discharging power
         soc = {}  # State of charge
         for batt_type in grid_model.battery_set:
-            discharge_factor = 1 if batt_type not in cannot_discharge else 0
+            discharge_factor = 1 if grid_model.can_discharge[batt_type] else 0
             for t in time_steps:
                 charge[batt_type, t] = model.addVar(
                     name=f"charge_{batt_type}_{t}",
