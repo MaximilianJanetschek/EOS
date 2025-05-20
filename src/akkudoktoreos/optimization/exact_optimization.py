@@ -1,7 +1,10 @@
-from typing import Any, Optional
-from pydantic import Field
-from pyscipopt import Model, quicksum, Variable
 import time
+from dataclasses import dataclass, field
+from typing import Any, Dict, Optional
+
+from pydantic import Field
+from pyscipopt import Model, Variable, quicksum
+
 from akkudoktoreos.core.coreabc import (
     ConfigMixin,
     DevicesMixin,
@@ -9,10 +12,8 @@ from akkudoktoreos.core.coreabc import (
 )
 from akkudoktoreos.core.pydantic import ParametersBaseModel
 from akkudoktoreos.optimization.genetic import OptimizationParameters
-from akkudoktoreos.optimization.utils import visualize_warm_start, ModelParameters
-from dataclasses import dataclass, field
-from typing import Dict
 from akkudoktoreos.optimization.greedy_construction import GreedyConstructionSolver
+from akkudoktoreos.optimization.utils import ModelParameters
 
 
 class ExactSolutionResponse(ParametersBaseModel):
@@ -278,17 +279,12 @@ class MILPOptimization(ConfigMixin, DevicesMixin, EnergyManagementSystemMixin):
         vars: ModelVariables,
         time_steps: range,
         model_params: ModelParameters,
-    ):
+    ) -> None:
         # Calculate warm start solution
         greedy_solver = GreedyConstructionSolver(verbose=self.verbose)
         greedy_start = greedy_solver.generate_warm_start(
             time_steps=time_steps, model_params=model_params
         )
-
-        if False:
-            visualize_warm_start(
-                heur_sol=greedy_start, model_params=model_params, time_steps=time_steps
-            )
 
         # Create a solution object
         solution = model.createSol()

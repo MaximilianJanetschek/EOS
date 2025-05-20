@@ -45,7 +45,7 @@ class HeuristicSolution:
     flow_direction: np.ndarray
 
     @classmethod
-    def from_params(cls, model_params: ModelParameters, time_steps: range):
+    def from_params(cls, model_params: ModelParameters, time_steps: range) -> "HeuristicSolution":
         """Create a new HeuristicSolution from model parameters.
 
         Initializes a solution instance with default values based on the provided
@@ -94,7 +94,7 @@ class HeuristicSolution:
             flow_direction,
         )
 
-    def _update_grid_values(self, model_params: ModelParameters):
+    def _update_grid_values(self, model_params: ModelParameters) -> None:
         """Calculate grid interactions based on power balance across the system.
 
         This method vectorizes the grid interaction calculations for the entire time horizon,
@@ -289,7 +289,7 @@ class GreedyConstructionSolver:
 
         return greedy_sol
 
-    def time_swap(self, greedy_sol) -> HeuristicSolution:
+    def time_swap(self, greedy_sol: HeuristicSolution) -> HeuristicSolution:
         """Optimize the solution through time-based price arbitrage.
 
         This method identifies opportunities to charge batteries during low-price
@@ -585,7 +585,7 @@ class GreedyConstructionSolver:
                     # Calculate how much more we can charge at this timestep
                     available_charge_power = (
                         self.model_params.power_max[batt_type]
-                        - greedy_sol.charge[batt_type, earlier_t]
+                        - greedy_sol.charge[batt_idx, earlier_t]
                     )
 
                     if available_charge_power <= 0:
@@ -602,7 +602,7 @@ class GreedyConstructionSolver:
 
                     if power_to_add > 0:
                         # Add charge
-                        greedy_sol.charge[batt_type, earlier_t] += power_to_add
+                        greedy_sol.charge[batt_idx, earlier_t] += power_to_add
 
                         # we need to check if the soc allows to transfer the power
                         soc_increase = energy_to_add / self.model_params.capacity[batt_type]
@@ -625,7 +625,7 @@ class GreedyConstructionSolver:
                 if remaining_shortfall > 0:
                     for earlier_t in range(0, t):
                         # Calculate how much we can reduce discharge
-                        reducible_discharge = greedy_sol.discharge[batt_type, earlier_t]
+                        reducible_discharge = greedy_sol.discharge[batt_idx, earlier_t]
 
                         if reducible_discharge <= 0:
                             continue  # No discharge to reduce
@@ -643,7 +643,7 @@ class GreedyConstructionSolver:
 
                         if discharge_to_reduce > 0:
                             # Reduce discharge
-                            greedy_sol.discharge[batt_type, earlier_t] -= discharge_to_reduce
+                            greedy_sol.discharge[batt_idx, earlier_t] -= discharge_to_reduce
 
                             # Reduce remaining shortfall
                             remaining_shortfall -= energy_to_save
