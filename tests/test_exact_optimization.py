@@ -842,7 +842,7 @@ class TestExactOptimization:
                 current_soc += (charge * charge_eff / capacity_wh) * 100
             else:
                 discharge_eff = (
-                    params.pv_akku.discharge_efficiency if (params.pv_akku) is not None else 1
+                    params.pv_akku.discharging_efficiency if (params.pv_akku) is not None else 1
                 )
 
                 current_soc += (charge / discharge_eff / capacity_wh) * 100
