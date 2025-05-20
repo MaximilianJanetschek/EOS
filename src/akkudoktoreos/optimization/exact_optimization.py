@@ -1,7 +1,7 @@
 from typing import Any, Optional
 from pydantic import Field
 from pyscipopt import Model, quicksum, Variable
-
+import time
 from akkudoktoreos.core.coreabc import (
     ConfigMixin,
     DevicesMixin,
@@ -226,7 +226,7 @@ class MILPOptimization(ConfigMixin, DevicesMixin, EnergyManagementSystemMixin):
             for batt_type in grid_model.battery_set
         )
         model.setObjective(objective, "maximize")
-
+        model.hideOutput()
         model_vars = ModelVariables(
             charge=charge,
             discharge=discharge,
@@ -239,8 +239,11 @@ class MILPOptimization(ConfigMixin, DevicesMixin, EnergyManagementSystemMixin):
         # set warm start
         self.set_warm_start(model, model_vars, time_steps, grid_model)
 
-        model.optimize()
+        start_time = time.time()
 
+        model.optimize()
+        end_time = time.time() - start_time
+        print(f"Total optimization time: {end_time:.4f} seconds.")
         # Solve the model
         if self.verbose:
             print("Number of variables:", len(model.getVars()))
@@ -256,12 +259,6 @@ class MILPOptimization(ConfigMixin, DevicesMixin, EnergyManagementSystemMixin):
                 model.getVal(charge["pv_akku", t]) - model.getVal(discharge["pv_akku", t])
                 for t in time_steps
             ]
-            for i in time_steps:
-                print(
-                    model.getVal(soc["pv_akku", i]),
-                    model.getVal(charge["pv_akku", i]),
-                    model.getVal(discharge["pv_akku", i]),
-                )
         else:
             akku_charge = []
 

@@ -94,7 +94,7 @@ class HeuristicSolution:
             flow_direction,
         )
 
-    def _update_grid_values(self, model_params: ModelParameters, time_steps: range):
+    def _update_grid_values(self, model_params: ModelParameters):
         """Calculate grid interactions based on power balance across the system.
 
         This method vectorizes the grid interaction calculations for the entire time horizon,
@@ -285,7 +285,7 @@ class GreedyConstructionSolver:
             cumsum_change = np.cumsum(soc_change)
             greedy_sol.soc[batt_idx, :] = self.model_params.soc_init[batt_type] + cumsum_change
 
-        greedy_sol._update_grid_values(model_params=self.model_params, time_steps=self.time_steps)
+        greedy_sol._update_grid_values(model_params=self.model_params)
 
         return greedy_sol
 
@@ -457,7 +457,6 @@ class GreedyConstructionSolver:
         # Get time indices sorted by price (highest first)
         # Only use indices that are within our time_steps
         prices_in_range = np.array(self.model_params.price_import[: len(self.time_steps)])
-        import_mask = greedy_sol.grid_import > 0
         des_prices = np.argsort(prices_in_range)[::-1]
 
         # Process high-price times first
@@ -520,7 +519,7 @@ class GreedyConstructionSolver:
                             greedy_sol.soc[batt_idx, t:] -= soc_change_pct
 
         # Update grid import/export after this change
-        greedy_sol._update_grid_values(model_params=self.model_params, time_steps=self.time_steps)
+        greedy_sol._update_grid_values(model_params=self.model_params)
 
         return greedy_sol
 
@@ -672,7 +671,7 @@ class GreedyConstructionSolver:
                 )
 
         # Update grid import/export after second pass
-        greedy_sol._update_grid_values(model_params=self.model_params, time_steps=self.time_steps)
+        greedy_sol._update_grid_values(model_params=self.model_params)
 
         return greedy_sol
 
@@ -748,6 +747,6 @@ class GreedyConstructionSolver:
                         break
 
         # Update grid import/export after first pass
-        greedy_sol._update_grid_values(model_params=self.model_params, time_steps=self.time_steps)
+        greedy_sol._update_grid_values(model_params=self.model_params)
 
         return greedy_sol
