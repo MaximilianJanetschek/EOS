@@ -66,9 +66,7 @@ class MILPOptimization(ConfigMixin, DevicesMixin, EnergyManagementSystemMixin):
         self.opti_param: dict[str, Any] = {}
         self.verbose = verbose
 
-    def optimize_ems(
-        self, parameters: OptimizationParameters
-    ) -> ExactSolutionResponse:
+    def optimize_ems(self, parameters: OptimizationParameters) -> ExactSolutionResponse:
         """Solve the energy management system optimization problem using MILP.
 
         This method formulates and solves a MILP problem to minimize energy costs while satisfying
@@ -123,7 +121,7 @@ class MILPOptimization(ConfigMixin, DevicesMixin, EnergyManagementSystemMixin):
         # Define sets
         time_steps = range(self.config.optimization_hours)  # Time steps
 
-        grid_model = ModelParameters.init_from_parameters(parameters, config = self.config)
+        grid_model = ModelParameters.init_from_parameters(parameters, config=self.config)
 
         # Create variables
         charge = {}  # Charging power

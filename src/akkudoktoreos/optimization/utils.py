@@ -576,6 +576,7 @@ class ModelParameters:
         battery = getattr(parameters, batt_type, None)
 
         from akkudoktoreos.devices.battery import SolarPanelBatteryParameters
+
         if battery is not None:
             # Add all battery parameters with their default values if not specified
             self.soc_min[batt_type] = getattr(battery, "min_soc_percentage", 0)
@@ -585,8 +586,9 @@ class ModelParameters:
             self.capacity[batt_type] = getattr(battery, "capacity_wh", 0)
             self.eff_charge[batt_type] = getattr(battery, "charging_efficiency", 1)
             self.eff_discharge[batt_type] = getattr(battery, "discharging_efficiency", 1)
-            self.can_discharge[batt_type] = True if isinstance(battery, SolarPanelBatteryParameters) else False
-
+            self.can_discharge[batt_type] = (
+                True if isinstance(battery, SolarPanelBatteryParameters) else False
+            )
 
             # Add battery type to the set of available batteries
             self.battery_set.append(batt_type)
